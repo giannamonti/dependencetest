@@ -14,29 +14,24 @@ Authors@R:
              email = "gianna.monti@unimib.it",
              comment = c())             
              )
-Description: Data Analysis for PERMANENT PEM fuel cell degradation.
-License: MIT + file LICENSE
+Description: TODO(description)
+License: AFL-3.0 + file LICENSE
 URL: https://github.com:giannamonti/dependencetest
 BugReports: https://github.com:giannamonti/dependencetest/issues
 Depends: 
     R (>= 4.4.0)
 Imports:
     doParallel,
-    dplyr,
-    FKF,
     foreach,
     forecast,
-    goftest,
-    kableExtra,
     knitr,
-    laGP,
     MASS,
-    Matrix,
-    numDeriv,
-    pacman,
     parallel,
-    readxl,
     sandwich,
+    mvtnorm,
+    energy,
+    dependence,
+    data.table,
     stats,
     rlang
 Suggests:
@@ -57,7 +52,7 @@ Suggests:
     rmarkdown,
     roxygen2 (>= 7.3.2),
     testthat (>= 2.1.0),
-Remotes: cran4linux/rspm,
+Remotes: matteopelagatti/dependence,
 VignetteBuilder: 
     knitr
 Encoding: UTF-8
