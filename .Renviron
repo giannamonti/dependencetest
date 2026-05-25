@@ -1,0 +1,3 @@
+# @see: https://rstudio.github.io/renv/articles/renv.html
+#RENV_PATHS_CACHE
+#_R_CHECK_FORCE_SUGGESTS_=0

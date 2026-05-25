@@ -1,0 +1,717 @@
+[project]
+name = "dependencetest"
+version = "1.0.0"
+description = "TODO(description)"
+authors = [
+{ name = "Roman Parzer", email = "TBD@nowhere.net" },
+{ name = "Gianna Monti", email = "gianna.monti@unimib.it" },
+]
+license = "GNU General Public License v3.0"
+readme = "README.md"
+documentation = "https://github.com:giannamonti/dependencetest"
+homepage = "https://github.com:giannamonti/dependencetest"
+repository = "https://github.com:giannamonti/dependencetest"
+
+dynamic = ["dependencies"]
+requires-python = "^3.12"
+
+[tool.poetry]
+requires-poetry = ">=2.0"
+packages = [{ include = "*", from = "inst/python/src" }]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+res = ["inst/python/resources/*", "inst/python/resources/*/*"]
+
+[project.scripts]
+main = "dve.cli:main"
+hello = "dve.scripts.dummy.dummy_script:main"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+# python = ">=3.8,<3.11"
+
+
+# {{{ CUDA: Cuda-12 from NVIDIA package index
+
+# NVIDIA Tensorflow cuda binaries: from https://github.com/nvidia/tensorflow/
+
+# Tensorflow 2.19 cuda dependencies
+# @see: https://github.com/tensorflow/tensorflow/blob/v2.19.0/ci/official/requirements_updater/requirements.in#L31
+
+# nvidia-cuda-runtime-cu12 = {version = "*", source = "nvidia"}
+
+
+#@[nv]# nvidia-cublas-cu12 = {version = "*"}
+#@[nv]# nvidia-cuda-cupti-cu12 = {version = "*"}
+#@[nv]# nvidia-cuda-nvcc-cu12 = {version = "*"}
+#@[nv]# nvidia-cuda-nvrtc-cu12 = {version = "*"}
+#@[nv]# nvidia-cuda-runtime-cu12 = {version = "*"}
+#@[nv]# nvidia-cudnn-cu12 = {version = "*"}
+#@[nv]# nvidia-cufft-cu12 = {version = "*"}
+#@[nv]# nvidia-curand-cu12 = {version = "*"}
+#@[nv]# nvidia-cusolver-cu12 = {version = "*"}
+#@[nv]# nvidia-cusparse-cu12 = {version = "*"}
+#@[nv]# nvidia-nccl-cu12 = {version = "*"}
+#@[nv]# nvidia-nvjitlink-cu12 = {version = "*"}
+
+### }}} // cuda
+
+
+# {{{ TENSORFLOW: from rstudio/tensorflow/R/install.R@default_extra_packages
+
+#@[nv]# tensorflow = {extras = ["and-cuda"], version = "^2.19.0"}
+## tensorflow = {version = "=2.25.*"}
+## tensorflow = {version = "=2.18.*"}
+## tensorflow = {version = "=2.12.*"}
+## tensorflow-estimator = "*"
+#@[nv]# tensorboard = "*"
+#@[nv]# tensorflow-hub = "*"
+#@[nv]# tensorflow-datasets = "*"
+
+### }}} // tensorflow
+
+
+# {{{ TENSORFLOW: TensorRT
+
+# TensorRT install: from https://docs.nvidia.com/deeplearning/tensorrt/support-matrix/index.html
+# TensorRT compatibility: from https://docs.nvidia.com/deeplearning/tensorrt/support-matrix/index.html
+
+#@[nv]# tensorrt = "*"
+
+#tensorrt_lean = "*"
+#tensorrt_dispatch = "*"
+#libnvinfer = "*"
+
+### }}} // tensorflow
+
+
+# {{{ TORCH: from https://pytorch.org/get-started/locally/
+##torch = {version = "*"}
+##torch = {version = "=2.5.*"}
+#@[nv]# torch = {version = "=2.5.*", source = "torch124"}
+##torch = {version = "=2.1.1*", source = "torch121"}
+#@[nv]# torchvision = {version = "*"}
+##torch_geometric = {version = "*"}
+
+### }}} // torch
+
+
+# {{{ KERAS: from rstudio/keras/R/install.R@default_extra_packages
+
+# tensorflow-hub = '*'
+# tensorflow-datasets = '*'
+
+### }}} // keras
+
+# {{{ DATA: 
+
+# --- [core] -----------------------------------
+numpy = '*'
+pandas = '*'
+
+# --- [cuda] -----------------------------------
+#@[nv]# pynvml = '*'
+#@[nv]# nvidia-ml-py = '*'
+
+# --- [raw] -----------------------------------
+pandas-datareader = '*'
+openpyxl = '*'
+h5py = '*'
+
+# --- [data] -----------------------------------
+pyarrow = '*'
+polars = '*'
+
+# --- [sql] --------------------------------------
+SQLAlchemy = "*"
+
+#mysql-connector-python = "*"
+# requires: sudo apt install default-libmysqlclient-dev
+mysqlclient = "*"
+
+# requires: sudo apt install libpq-dev
+#psycopg2 = "*"
+psycopg2-binary = "*"
+
+
+### }}} // data
+
+# {{{ STAT: 
+
+# --- [ml] -----------------------------------
+# scikit-learn = "*"
+# scikit-image = "*"
+# sklearn = "*"
+
+# --- [math] -----------------------------------
+scipy = '*'
+sympy = "*"
+
+# --- [sim] --------------------------------------
+# simpy = "*"
+
+### }}} // data
+
+# {{{ GRAPHICS: 
+
+# --- [plots] -----------------------------------
+matplotlib = "*"
+plotly = '*'
+seaborn = "*"
+
+# --- [images] -----------------------------------
+Pillow = '*'
+
+# --- [graph] -----------------------------------
+graphframes = '*'
+graphviz = '*'
+networkx = '*'
+igraph = '*'
+pyvis = '*'
+pydot = '*'
+
+### }}} // graphics
+
+# {{{ SYSTEM: 
+
+# --- [network] -----------------------------------
+requests = '*'
+oauthlib = "*"
+requests-oauthlib = "*"
+urllib3 = "*"
+
+# --- [local] -----------------------------------
+pyzmq = "*"
+
+# --- [config] -----------------------------------
+pyyaml = '*'
+piny = "*"
+toml = "*"
+click = '*'
+
+# --- [logging] -----------------------------------
+icecream = '*'
+
+# --- [console] -----------------------------------
+radian = '*'
+
+# --- [script] -----------------------------------
+tqdm = '*'
+
+
+# --- [libs] -----------------------------------
+pip = "*"
+
+
+### }}} // system
+
+# {{{ LANG: 
+
+# --- [commons] -----------------------------------
+# six = ">=1.7.0,<=1.15.0"
+more-itertools = "*"
+
+### }}} // system
+
+
+[tool.poetry.group.dev.dependencies]
+
+# {{{ JUPYTER: from https://docs.jupyter.org/en/latest/install.html
+
+# --- [jupyter core] -----------------------------------
+jupyter = "*"
+jupyter-core = "*"
+jupyter-console = "*"
+jupyter-lsp = "*"
+notebook = "*"
+
+# --- [jupyter hub] --------------------------------------
+#jupyterhub = "*"
+#tornado = "*"
+
+# --- [jupyter lab] --------------------------------------
+jupyterlab = "*"
+
+# --- [jupyter ext] --------------------------------------
+jupytext = "*"
+
+# --- [jupyter lsp] --------------------------------------
+jupyterlab-lsp = "*"
+nodeenv = '*'
+nodejs = '*'
+
+pyright = '*'
+python-lsp-server = { extras = ["yapf", "rope", "pyflakes"], version = "*" }
+python-lsp-black = "*"
+
+black = { extras = ["jupyter"], version = "*" }
+
+# --- [jupyter dash] --------------------------------------
+lux-api = "*"
+
+# --- [jupyter kernels] -----------------------------------
+ipykernel = "*"
+#jupyterhub = "*"
+#ansible-kernel = "*"
+#dot_kernel = "*"
+#dot_kernel = "*"
+#jswip = "*"
+#matlab_kernel = "*"
+#octave_kernel = "*"
+#sparqlkernel = "*"
+#toree = "*"
+
+# --- [jupyter console] -----------------------------------
+
+ipython = "*"
+ipython-bg = "*"
+
+
+### }}} // jupyter
+
+
+# {{{ TOOLS: 
+
+# --- [test] -----------------------------------
+pytest = { version = "*" }
+pytest-flask = "*"
+pytest-cov = "*"
+unittest2 = { version = "*" }
+#   pytest-spark = "*"
+#   pyspark-test = "*"
+#   chispa = "*"
+coverage = "*"
+mock = "*"
+nose = "*"
+#codecov = "*"
+
+# --- [lint] --------------------------------------
+pylint = "*"
+flake8 = "*"
+pyproject-flake8 = "*"
+jedi = "*"
+autopep8 = "*"
+yapf = '*'
+isort = "*"
+pipreqs = "*"
+ruff = "*"
+#black = { extras = ["jupyter"], version = "*" }
+
+# --- [docs] --------------------------------------
+sphinx = "*"
+nbsphinx = "*"
+sphinx-autoapi = "*"
+sphinx-rtd-theme = "*"
+
+### }}} // tools
+
+
+# {{{ MISC: 
+
+# --- [util] -----------------------------------
+colorama = "*"
+py = "*"
+mypy = "*"
+
+### }}} // misc
+
+
+# {{{ release:
+
+# --- [package] -----------------------------------
+setuptools = "*"
+wheel = "*"
+
+# --- [auto] --------------------------------------
+bumpversion = "*"
+twine = '*'
+
+### }}} // release
+
+#[[tool.poetry.source]]
+#name = 'default'
+#url = 'https://pypi.org/'
+
+
+[[tool.poetry.source]]
+name = "torch121"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"
+
+[[tool.poetry.source]]
+name = "torch124"
+url = "https://download.pytorch.org/whl/cu124"
+priority = "explicit"
+
+[[tool.poetry.source]]
+name = "nvidia"
+url = "https://pypi.ngc.nvidia.com"
+priority = "supplemental"
+
+[[tool.poetry.source]]
+name = "pypi-public"
+url = "https://pypi.org/simple/"
+priority = "primary"
+
+
+[tool.poetry.dependencies.rootpath]
+git = "https://github.com/hute37/python-rootpath"
+branch = "stable"
+
+# {{{ LSP:
+
+# --- [pyright] --------------------------------------
+
+# @see: https://github.com/microsoft/pyright/blob/main/docs/configuration.md
+[tool.pyright]
+include = ["inst/python/src", "tests/pytest", "notebooks"]
+exclude = [
+  "**/node_modules",
+  "**/__pycache__",
+  "docker",
+  "notes",
+  "data",
+  "logs",
+  "temp",
+]
+ignore = ["build"]
+defineConstant = { DEBUG = true }
+#stubPath = "src/stubs"
+#venv = "env367"
+verboseOutput = true
+typeCheckingMode = "basic"
+reportMissingImports = true
+
+### }}} // lsp
+
+# {{{ TEST:
+
+# --- [pytest] --------------------------------------
+
+[tool.pytest.ini_options]
+pythonpath = ["inst/python/src", "tests/pytest"]
+testpaths = ["tests/pytest"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+### }}} // test
+
+
+# {{{ FORMAT: 
+
+# --- [flake8] --------------------------------------
+
+# flake8 config unused, @see setup.cfg
+# [tool.flake8]
+# max-line-length = 88
+# extend-ignore = "E203,"
+# max-complexity = 10
+
+# --- [isort] --------------------------------------
+
+[tool.isort]
+profile = "black"
+
+
+# --- [black] --------------------------------------
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+exclude = '''
+
+(
+  /(
+      \.eggs         # exclude a few common directories in the
+    | \.git          # root of the project
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+  )/
+  | foo.py           # also separately exclude a file named foo.py in
+                     # the root of the project
+)
+'''
+
+# --- [ruff] --------------------------------------
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+fix = true
+
+[tool.ruff.lint]
+unfixable = []
+typing-modules = ["pandas._typing"]
+
+exclude = [
+  "doc/sphinxext/*.py",
+  "doc/build/*.py",
+  "doc/temp/*.py",
+  ".eggs/*.py",
+  # vendored files
+  "pandas/util/version/*",
+  "pandas/io/clipboard/__init__.py",
+  # exclude asv benchmark environments from linting
+  "env",
+]
+
+select = [
+  # pyflakes
+  "F",
+  # pycodestyle
+  "E",
+  "W",
+  # flake8-2020
+  "YTT",
+  # flake8-bugbear
+  "B",
+  # flake8-quotes
+  "Q",
+  # flake8-debugger
+  "T10",
+  # flake8-gettext
+  "INT",
+  # pylint
+  "PL",
+  # flake8-pytest-style
+  "PT",
+  # misc lints
+  "PIE",
+  # flake8-pyi
+  "PYI",
+  # tidy imports
+  "TID",
+  # implicit string concatenation
+  "ISC",
+  # type-checking imports
+  "TCH",
+  # comprehensions
+  "C4",
+  # pygrep-hooks
+  "PGH",
+  # Ruff-specific rules
+  "RUF",
+  # flake8-bandit: exec-builtin
+  "S102",
+  # numpy-legacy-random
+  "NPY002",
+  # Perflint
+  "PERF",
+  # flynt
+  "FLY",
+  # flake8-logging-format
+  "G",
+  # flake8-future-annotations
+  "FA",
+  # unconventional-import-alias
+  "ICN001",
+  # flake8-slots
+  "SLOT",
+  # flake8-raise
+  "RSE",
+]
+
+ignore = []
+
+# ignore = [
+#   ### Intentionally disabled
+#   # module level import not at top of file
+#   "E402",
+#   # do not assign a lambda expression, use a def
+#   "E731",
+#   # controversial
+#   "B007",
+#   # controversial
+#   "B008",
+#   # setattr is used to side-step mypy
+#   "B009",
+#   # getattr is used to side-step mypy
+#   "B010",
+#   # tests use comparisons but not their returned value
+#   "B015",
+#   # Function definition does not bind loop variable
+#   "B023",
+#   # Only works with python >=3.10
+#   "B905",
+#   # Too many arguments to function call
+#   "PLR0913",
+#   # Too many returns
+#   "PLR0911",
+#   # Too many branches
+#   "PLR0912",
+#   # Too many statements
+#   "PLR0915",
+#   # Redefined loop name
+#   "PLW2901",
+#   # Global statements are discouraged
+#   "PLW0603",
+#   # Use `typing.NamedTuple` instead of `collections.namedtuple`
+#   "PYI024",
+#   # Use of possibly insecure function; consider using ast.literal_eval
+#   "S307",
+#   # while int | float can be shortened to float, the former is more explicit
+#   "PYI041",
+#   # incorrect-dict-iterator, flags valid Series.items usage
+#   "PERF102",
+#   # try-except-in-loop, becomes useless in Python 3.11
+#   "PERF203",
+#   # pytest-missing-fixture-name-underscore
+#   "PT004",
+#   # pytest-incorrect-fixture-name-underscore
+#   "PT005",
+#   # pytest-parametrize-names-wrong-type
+#   "PT006",
+#   # pytest-parametrize-values-wrong-type
+#   "PT007",
+#   # pytest-patch-with-lambda
+#   "PT008",
+#   # pytest-raises-with-multiple-statements
+#   "PT012",
+#   # pytest-assert-in-except
+#   "PT017",
+#   # pytest-composite-assertion
+#   "PT018",
+#   # pytest-fixture-param-without-value
+#   "PT019",
+#   # The following rules may cause conflicts when used with the formatter:
+#   "ISC001",
+#   # if-stmt-min-max
+#   "PLR1730",
+
+#   ### TODO: Enable gradually
+#   # Useless statement
+#   "B018",
+#   # Magic number
+#   "PLR2004",
+#   # comparison-with-itself
+#   "PLR0124",
+#   # collection-literal-concatenation
+#   "RUF005",
+#   # pairwise-over-zipped (>=PY310 only)
+#   "RUF007",
+#   # mutable-class-default
+#   "RUF012",
+#   # type-comparison
+#   "E721",
+#   # repeated-equality-comparison
+#   "PLR1714",
+#   # self-or-cls-assignment
+#   "PLW0642",
+#   # literal-membership
+#   "PLR6201", # 847 errors
+#   # Method could be a function, class method, or static method
+#   "PLR6301", # 11411 errors
+#   # Private name import
+#   "PLC2701", # 27 errors
+#   # Too many positional arguments (6/5)
+#   "PLR0917", # 470 errors
+#   # compare-to-empty-string
+#   "PLC1901",
+#   # `tempfile.NamedTemporaryFile` in text mode without explicit `encoding` argument
+#   "PLW1514", # 1 error
+#   # Object does not implement `__hash__` method
+#   "PLW1641", # 16 errors
+#   # Bad or misspelled dunder method name
+#   "PLW3201", # 69 errors, seems to be all false positive
+#   # Unnecessary lookup of dictionary value by key
+#   "PLR1733", # 5 errors, it seems like we wannt to ignore these
+#   # Unnecessary lookup of list item by index
+#   "PLR1736", # 4 errors, we're currently having inline pylint ignore
+#   # empty-comment
+#   "PLR2044", # autofixable
+#   # Unpacking a dictionary in iteration without calling `.items()`
+#   "PLE1141", # autofixable
+#   # import-outside-toplevel
+#   "PLC0415",
+#   # unnecessary-dunder-call
+#   "PLC2801",
+#   # comparison-with-itself
+#   "PLR0124",
+#   # too-many-public-methods
+#   "PLR0904",
+#   # too-many-return-statements
+#   "PLR0911",
+#   # too-many-branches
+#   "PLR0912",
+#   # too-many-arguments
+#   "PLR0913",
+#   # too-many-locals
+#   "PLR0914",
+#   # too-many-statements
+#   "PLR0915",
+#   # too-many-boolean-expressions
+#   "PLR0916",
+#   # too-many-nested-blocks
+#   "PLR1702",
+#   # redefined-argument-from-local
+#   "PLR1704",
+#   # unnecessary-lambda
+#   "PLW0108",
+#   # global-statement
+#   "PLW0603",
+# ]
+
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+split-on-trailing-commas = false
+
+
+# [tool.ruff.lint.flake8-tidy-imports.banned-api]
+# "urllib.request.urlopen".msg = "Use pandas.io.common.urlopen instead of urllib.request.urlopen"
+# # numpy.random is banned but np.random is not. Is this intentional?
+# # "numpy.random".msg = "Do not use numpy.random"
+# "pytest.warns".msg = "Use tm.assert_produces_warning instead of pytest.warns"
+# "pytest.xfail".msg = "Use pytest.mark.xfail instead of pytest.xfail"
+# "conftest".msg = "No direct imports from conftest"
+# "numpy.testing".msg = "Do not use numpy.testing"
+# # "numpy.array_equal".msg = "Do not use numpy.array_equal" # Used in pandas/core
+# "unittest.mock".msg = "use pytest builtin monkeypatch fixture instead"
+# "os.remove".msg = "Do not use os.remove"
+
+# [tool.ruff.lint.flake8-import-conventions.aliases]
+# "pandas.core.construction.array" = "pd_array"
+
+# [tool.ruff.lint.per-file-ignores]
+# # relative imports allowed for asv_bench
+# "asv_bench/*" = ["TID", "NPY002"]
+# # to be enabled gradually
+# "pandas/core/*" = ["PLR5501"]
+# "pandas/tests/*" = ["B028", "FLY"]
+# "scripts/*" = ["B028"]
+# # Keep this one enabled
+# "pandas/_typing.py" = ["TCH"]
+
+# [tool.ruff.lint.flake8-pytest-style]
+# fixture-parentheses = false
+# mark-parentheses = false
+
+[tool.ruff.format]
+docstring-code-format = true
+
+### }}} // format
+
+
+# {{{ BUILD: 
+
+[build-system]
+requires = ["poetry-core>=2.0", "setuptools", "wheel", "incremental"]
+build-backend = "poetry.core.masonry.api"
+#build-backend = "setuptools.build_meta"
+
+### }}} // build
