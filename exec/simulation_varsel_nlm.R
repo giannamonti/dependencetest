@@ -5,7 +5,6 @@ library(dependence)
 library(data.table)
 library(parallel)
 
-source("gendataRegMod.R")
 
 # -----------------------------------------------------------------------------
 # Directory setup
