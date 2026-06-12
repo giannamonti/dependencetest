@@ -39,6 +39,7 @@ library(tidyr)
 # -----------------------------------------------------------------------------
 n     <- 100
 nsim  <- 1e4          # set to e.g. 200 for a pilot run
+
 types      <- 1:10
 noises     <- seq(0.1, 2, 0.1)
 type_names <- c("Linear", "Quadratic", "Cubic", "Sine",
@@ -47,12 +48,12 @@ type_names <- c("Linear", "Quadratic", "Cubic", "Sine",
 # -----------------------------------------------------------------------------
 # Directory helpers
 # -----------------------------------------------------------------------------
-dir_results <- "results"
-dir_plots   <- "plots"
+dir_results <- "results_power"
+dir_plots   <- "plots_power"
 dir.create(dir_results, showWarnings = FALSE)
 dir.create(dir_plots,   showWarnings = FALSE)
 
-res_path <- function(...) file.path("results", ...)
+res_path  <- function(...) file.path(dir_results, ...)
 plot_path <- function(...) file.path(dir_plots,   ...)
 
 # -----------------------------------------------------------------------------
@@ -156,7 +157,7 @@ clusterEvalQ(cl, {
   library(MixedIndTests)
 })
 
-clusterExport(cl, c("n", "nsim", "type_names", "res_path"))
+clusterExport(cl, c("n", "nsim", "type_names", "dir_results", "res_path"))
 
 # -----------------------------------------------------------------------------
 # Worker function: processes one (type, noise) cell
@@ -244,9 +245,9 @@ run_one <- function(params) {
       par         = FALSE,
       graph       = FALSE
     )
-    # pvalue is a named vector; "Tn2" is the pairs-only combination
-    genest_dep[i] <- res_genest_dep$pvalue["Tn2"]
-    genest_ind[i] <- res_genest_ind$pvalue["Tn2"]
+    # pvalue$Tn2 is in 0-100 scale (undocumented); divide by 100 to get true p-value
+    genest_dep[i] <- res_genest_dep$pvalue$Tn2 / 100
+    genest_ind[i] <- res_genest_ind$pvalue$Tn2 / 100
     genest_tim[i] <- proc.time()["elapsed"] - t0
     
   }  # end simulation loop
