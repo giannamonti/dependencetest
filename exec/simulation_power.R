@@ -20,6 +20,11 @@
 #   TestIndCopula uses B = 1000 Gaussian multipliers internally.
 #   With nsim = 10,000 this is very slow; consider nsim = 100–500 for
 #   a quick pilot run (change the `nsim` constant below).
+#
+# Changes vs previous version:
+#   - Data passed in-memory via param_list (no CSV I/O on workers)
+#   - tryCatch around entire run_one body + around TestIndCopula calls
+#   - na.rm = TRUE in Genest power calculation
 # =============================================================================
 
 library(data.table)
@@ -123,21 +128,25 @@ XsdY <- function(n, noise) {
 }
 
 # -----------------------------------------------------------------------------
-# Pre-generate and save all simulated observations
-# (avoids re-generating on each worker; workers read from disk)
+# Pre-generate all simulation data IN MEMORY and embed into param_list
+# Workers receive data directly via the param payload — no disk I/O needed.
 # -----------------------------------------------------------------------------
-cat("Generating simulation data...\n")
+cat("Generating simulation data in memory...\n")
 set.seed(202210)
 
-for (ty in types) {
-  for (no in noises) {
-    sims        <- matrix(nrow = n * nsim, ncol = 3,
-                          dimnames = list(NULL, c("x", "y", "yperm")))
-    sims[, 1:2] <- t(datagen.noise(n * nsim, ty, no))
-    sims[, 3]   <- sims[sample.int(nrow(sims)), 2]   # global permutation → H0
-    fwrite(sims, res_path(paste0("sim_type", ty, "_noise", no, ".csv")))
-  }
+grid       <- expand.grid(ty = types, no = noises)
+param_list <- vector("list", nrow(grid))
+
+for (k in seq_len(nrow(grid))) {
+  ty <- grid$ty[k]
+  no <- grid$no[k]
+  sims        <- matrix(nrow = n * nsim, ncol = 3,
+                        dimnames = list(NULL, c("x", "y", "yperm")))
+  sims[, 1:2] <- t(datagen.noise(n * nsim, ty, no))
+  sims[, 3]   <- sims[sample.int(nrow(sims)), 2]   # global permutation → H0
+  param_list[[k]] <- list(ty = ty, no = no, sims = sims)
 }
+
 cat("Data generation complete.\n")
 
 # -----------------------------------------------------------------------------
@@ -145,10 +154,9 @@ cat("Data generation complete.\n")
 # -----------------------------------------------------------------------------
 n_cores <- max(1L, detectCores(logical = FALSE) - 1L)
 cat("Using", n_cores, "cores\n")
-cl <- makeCluster(n_cores)
+cl <- makeCluster(n_cores, rscript_args = "--no-init-file")
 
 clusterEvalQ(cl, {
-  library(data.table)
   library(HHG)
   library(energy)
   library(minerva)
@@ -157,143 +165,128 @@ clusterEvalQ(cl, {
   library(MixedIndTests)
 })
 
-clusterExport(cl, c("n", "nsim", "type_names", "dir_results", "res_path"))
+clusterExport(cl, c("n", "nsim", "type_names"))
 
 # -----------------------------------------------------------------------------
 # Worker function: processes one (type, noise) cell
+# Data arrives in params$sims — no file reading required.
+# The entire body is wrapped in tryCatch so a worker never crashes silently.
 # -----------------------------------------------------------------------------
 run_one <- function(params) {
-  
-  ty <- params$ty
-  no <- params$no
-  
-  fname <- res_path(paste0("sim_type", ty, "_noise", no, ".csv"))
-  sims  <- as.matrix(fread(fname))
-  file.remove(fname)   # free disk space immediately
-  
-  # Polynomial orders for the Bn / Pn test
-  p_ord <- 3L
-  q_ord <- if (ty <= 5L) 1L else 3L
-  
-  # ------- Storage vectors --------------------------------------------------
-  hhg_dep  <- numeric(nsim); hhg_ind  <- numeric(nsim); hhg_tim  <- numeric(nsim)
-  dcov_dep <- numeric(nsim); dcov_ind <- numeric(nsim); dcov_tim <- numeric(nsim)
-  mic_dep  <- numeric(nsim); mic_ind  <- numeric(nsim); mic_tim  <- numeric(nsim)
-  hoef_dep <- numeric(nsim); hoef_ind <- numeric(nsim); hoef_tim <- numeric(nsim)
-  ourB_dep <- numeric(nsim); ourB_ind <- numeric(nsim)
-  ourP_dep <- numeric(nsim); ourP_ind <- numeric(nsim); our_tim  <- numeric(nsim)
-  
-  # Genest: store p-values directly (test supplies its own null distribution)
-  genest_dep <- numeric(nsim); genest_ind <- numeric(nsim)
-  genest_tim <- numeric(nsim)
-  
-  # ------- Main simulation loop ---------------------------------------------
-  for (i in seq_len(nsim)) {
+  tryCatch({
     
-    X <- sims[((i - 1L)*n + 1L):(i*n), ]   # rows: obs; cols: x, y, yperm
+    ty   <- params$ty
+    no   <- params$no
+    sims <- params$sims   # matrix (n*nsim) x 3: x, y, yperm
     
-    # ---- HHG ----------------------------------------------------------------
-    t0 <- proc.time()["elapsed"]
-    Dx  <- as.matrix(dist(X[, 1], diag = TRUE, upper = TRUE))
-    Dy  <- as.matrix(dist(X[, 2], diag = TRUE, upper = TRUE))
-    Dy0 <- as.matrix(dist(X[, 3], diag = TRUE, upper = TRUE))
-    hhg_dep[i] <- hhg.test(Dx, Dy,  nr.perm = 0)[[1]]
-    hhg_ind[i] <- hhg.test(Dx, Dy0, nr.perm = 0)[[1]]
-    hhg_tim[i] <- proc.time()["elapsed"] - t0
+    # Polynomial orders for the Bn / Pn test
+    p_ord <- max(1L, floor(100^0.3) - 1L)   # = 3 for n = 100
+    q_ord <- p_ord
     
-    # ---- dCov ---------------------------------------------------------------
-    t0 <- proc.time()["elapsed"]
-    dcov_dep[i] <- dcov.test(X[, 1], X[, 2])$statistic
-    dcov_ind[i] <- dcov.test(X[, 1], X[, 3])$statistic
-    dcov_tim[i] <- proc.time()["elapsed"] - t0
+    # ------- Storage vectors ------------------------------------------------
+    hhg_dep  <- numeric(nsim); hhg_ind  <- numeric(nsim); hhg_tim  <- numeric(nsim)
+    dcov_dep <- numeric(nsim); dcov_ind <- numeric(nsim); dcov_tim <- numeric(nsim)
+    mic_dep  <- numeric(nsim); mic_ind  <- numeric(nsim); mic_tim  <- numeric(nsim)
+    hoef_dep <- numeric(nsim); hoef_ind <- numeric(nsim); hoef_tim <- numeric(nsim)
+    ourB_dep <- numeric(nsim); ourB_ind <- numeric(nsim)
+    ourP_dep <- numeric(nsim); ourP_ind <- numeric(nsim); our_tim  <- numeric(nsim)
+    genest_dep <- numeric(nsim); genest_ind <- numeric(nsim)
+    genest_tim <- numeric(nsim)
     
-    # ---- MIC ----------------------------------------------------------------
-    t0 <- proc.time()["elapsed"]
-    mic_dep[i] <- mine_stat(X[, 1], X[, 2])
-    mic_ind[i] <- mine_stat(X[, 1], X[, 3])
-    mic_tim[i] <- proc.time()["elapsed"] - t0
+    # ------- Main simulation loop -------------------------------------------
+    for (i in seq_len(nsim)) {
+      
+      X <- sims[((i - 1L)*n + 1L):(i*n), ]   # rows: obs; cols: x, y, yperm
+      
+      # ---- HHG --------------------------------------------------------------
+      t0 <- proc.time()["elapsed"]
+      Dx  <- as.matrix(dist(X[, 1], diag = TRUE, upper = TRUE))
+      Dy  <- as.matrix(dist(X[, 2], diag = TRUE, upper = TRUE))
+      Dy0 <- as.matrix(dist(X[, 3], diag = TRUE, upper = TRUE))
+      hhg_dep[i] <- hhg.test(Dx, Dy,  nr.perm = 0)[[1]]
+      hhg_ind[i] <- hhg.test(Dx, Dy0, nr.perm = 0)[[1]]
+      hhg_tim[i] <- proc.time()["elapsed"] - t0
+      
+      # ---- dCov -------------------------------------------------------------
+      t0 <- proc.time()["elapsed"]
+      dcov_dep[i] <- dcov.test(X[, 1], X[, 2])$statistic
+      dcov_ind[i] <- dcov.test(X[, 1], X[, 3])$statistic
+      dcov_tim[i] <- proc.time()["elapsed"] - t0
+      
+      # ---- MIC --------------------------------------------------------------
+      t0 <- proc.time()["elapsed"]
+      mic_dep[i] <- mine_stat(X[, 1], X[, 2])
+      mic_ind[i] <- mine_stat(X[, 1], X[, 3])
+      mic_tim[i] <- proc.time()["elapsed"] - t0
+      
+      # ---- Hoeffding's D ----------------------------------------------------
+      t0 <- proc.time()["elapsed"]
+      hoef_dep[i] <- hoeffd(X[, 1], X[, 2])$D[2]
+      hoef_ind[i] <- hoeffd(X[, 1], X[, 3])$D[2]
+      hoef_tim[i] <- proc.time()["elapsed"] - t0
+      
+      # ---- Bn / Pn (dependence package) ------------------------------------
+      t0 <- proc.time()["elapsed"]
+      res_dep  <- indeptest(X[, 1], X[, 2], basis = "poly", p = p_ord, q = q_ord)
+      res_ind  <- indeptest(X[, 1], X[, 3], basis = "poly", p = p_ord, q = q_ord)
+      ourB_dep[i] <- res_dep$B_stat;  ourB_ind[i] <- res_ind$B_stat
+      ourP_dep[i] <- res_dep$P_stat;  ourP_ind[i] <- res_ind$P_stat
+      our_tim[i]  <- proc.time()["elapsed"] - t0
+      
+      # ---- Genest (MixedIndTests) ------------------------------------------
+      t0 <- proc.time()["elapsed"]
+      genest_dep[i] <- tryCatch({
+        res <- TestIndCopula(cbind(X[, 1], X[, 2]),
+                             trunc.level = 2, B = 1000,
+                             par = FALSE, graph = FALSE)
+        res$pvalue$Tn2 / 100
+      }, error = function(e) NA_real_)
+      
+      genest_ind[i] <- tryCatch({
+        res <- TestIndCopula(cbind(X[, 1], X[, 3]),
+                             trunc.level = 2, B = 1000,
+                             par = FALSE, graph = FALSE)
+        res$pvalue$Tn2 / 100
+      }, error = function(e) NA_real_)
+      genest_tim[i] <- proc.time()["elapsed"] - t0
+      
+    }  # end simulation loop
     
-    # ---- Hoeffding's D ------------------------------------------------------
-    t0 <- proc.time()["elapsed"]
-    hoef_dep[i] <- hoeffd(X[, 1], X[, 2])$D[2]
-    hoef_ind[i] <- hoeffd(X[, 1], X[, 3])$D[2]
-    hoef_tim[i] <- proc.time()["elapsed"] - t0
-    
-    # ---- Bn / Pn (dependence package) --------------------------------------
-    t0 <- proc.time()["elapsed"]
-    res_dep  <- indeptest(X[, 1], X[, 2], basis = "poly", p = p_ord, q = q_ord)
-    res_ind  <- indeptest(X[, 1], X[, 3], basis = "poly", p = p_ord, q = q_ord)
-    ourB_dep[i] <- res_dep$B_stat;  ourB_ind[i] <- res_ind$B_stat
-    ourP_dep[i] <- res_dep$P_stat;  ourP_ind[i] <- res_ind$P_stat
-    our_tim[i]  <- proc.time()["elapsed"] - t0
-    
-    # ---- Genest (MixedIndTests) ---------------------------------------------
-    # TestIndCopula returns p-values via Gaussian multipliers (B = 1000).
-    # For the bivariate case Tn2 (pairs only) is the appropriate statistic.
-    t0 <- proc.time()["elapsed"]
-    res_genest_dep <- TestIndCopula(
-      cbind(X[, 1], X[, 2]),
-      trunc.level = 2,
-      B           = 1000,
-      par         = FALSE,
-      graph       = FALSE
+    # ------- Power estimates ------------------------------------------------
+    data.frame(
+      power = c(
+        mean(hhg_dep  > quantile(hhg_ind,  0.95)),
+        mean(dcov_dep > quantile(dcov_ind, 0.95)),
+        mean(mic_dep  > quantile(mic_ind,  0.95)),
+        mean(hoef_dep > quantile(hoef_ind, 0.95)),
+        mean(ourB_dep > quantile(ourB_ind, 0.95)),
+        mean(ourP_dep > quantile(ourP_ind, 0.95)),
+        mean(genest_dep < 0.05, na.rm = TRUE)
+      ),
+      time = c(
+        mean(hhg_tim),
+        mean(dcov_tim),
+        mean(mic_tim),
+        mean(hoef_tim),
+        mean(our_tim),
+        mean(our_tim),   # Bn and Pn share the same timing call
+        mean(genest_tim)
+      ),
+      noise = no,
+      type  = type_names[ty],
+      test  = c("HHG", "dCov", "MIC", "Hoef", "Bn", "Pn", "Genest")
     )
-    res_genest_ind <- TestIndCopula(
-      cbind(X[, 1], X[, 3]),
-      trunc.level = 2,
-      B           = 1000,
-      par         = FALSE,
-      graph       = FALSE
-    )
-    # pvalue$Tn2 is in 0-100 scale (undocumented); divide by 100 to get true p-value
-    genest_dep[i] <- res_genest_dep$pvalue$Tn2 / 100
-    genest_ind[i] <- res_genest_ind$pvalue$Tn2 / 100
-    genest_tim[i] <- proc.time()["elapsed"] - t0
     
-  }  # end simulation loop
-  
-  # ------- Power estimates --------------------------------------------------
-  # Tests with empirical null: compare statistic vs 95th percentile of null dist
-  # Genest: uses own p-value → reject when p < 0.05
-  data.frame(
-    power = c(
-      mean(hhg_dep  > quantile(hhg_ind,  0.95)),
-      mean(dcov_dep > quantile(dcov_ind, 0.95)),
-      mean(mic_dep  > quantile(mic_ind,  0.95)),
-      mean(hoef_dep > quantile(hoef_ind, 0.95)),
-      mean(ourB_dep > quantile(ourB_ind, 0.95)),
-      mean(ourP_dep > quantile(ourP_ind, 0.95)),
-      mean(genest_dep < 0.05)
-    ),
-    time = c(
-      mean(hhg_tim),
-      mean(dcov_tim),
-      mean(mic_tim),
-      mean(hoef_tim),
-      mean(our_tim),
-      mean(our_tim),   # Bn and Pn share the same timing call
-      mean(genest_tim)
-    ),
-    noise = no,
-    type  = type_names[ty],
-    test  = c("HHG", "dCov", "MIC", "Hoef", "Bn", "Pn", "Genest")
-  )
+  }, error = function(e) {
+    message("ERROR type=", params$ty, " noise=", params$no, ": ", conditionMessage(e))
+    NULL
+  })
 }
 
 # -----------------------------------------------------------------------------
-# Build parameter grid and export helpers to workers
+# Export worker function to cluster
 # -----------------------------------------------------------------------------
-param_list <- Map(
-  function(ty, no) list(ty = ty, no = no),
-  expand.grid(ty = types, no = noises)$ty,
-  expand.grid(ty = types, no = noises)$no
-)
-
-clusterExport(cl, c(
-  "run_one",
-  "datagen.noise", "linear", "quadratic", "cubic", "sine",
-  "x14", "circle", "twocurves", "Xfun", "Diamond", "XsdY"
-))
+clusterExport(cl, "run_one")
 
 set.seed(20230101)
 clusterSetRNGStream(cl, 20230101)
@@ -314,6 +307,12 @@ stopCluster(cl)
 # -----------------------------------------------------------------------------
 # Collect and save results
 # -----------------------------------------------------------------------------
+
+# Drop any NULL entries from cells that errored
+n_null <- sum(sapply(results_list, is.null))
+if (n_null > 0L) warning(n_null, " cells returned NULL and were dropped.")
+results_list <- Filter(Negate(is.null), results_list)
+
 tests <- rbindlist(results_list)
 tests$type <- factor(tests$type, levels = type_names)
 fwrite(tests, res_path("test_power.csv"))
