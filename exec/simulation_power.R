@@ -156,6 +156,10 @@ n_cores <- max(1L, detectCores(logical = FALSE) - 1L)
 cat("Using", n_cores, "cores\n")
 cl <- makeCluster(n_cores, rscript_args = "--no-init-file")
 
+lib_path <- .libPaths()   # prende i path dal master
+clusterExport(cl, "lib_path")
+clusterEvalQ(cl, .libPaths(lib_path))
+
 clusterEvalQ(cl, {
   library(HHG)
   library(energy)
