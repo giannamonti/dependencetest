@@ -199,7 +199,7 @@ run_one <- function(params) {
       }, error = function(e) NA_real_)
       
       brs.pval3[i] <- tryCatch({
-        indep.test(x3i, y3i, method = "mvI")$p.value
+        indep.test(x3i, y3i, method = "mvI", R = 199)$p.value
       }, error = function(e) NA_real_)
       
       # ---- 5 x 5 table ------------------------------------------------------
@@ -220,7 +220,7 @@ run_one <- function(params) {
       }, error = function(e) NA_real_)
       
       brs.pval5[i] <- tryCatch({
-        indep.test(x5i, y5i, method = "mvI")$p.value
+        indep.test(x5i, y5i, method = "mvI", R = 199)$p.value
       }, error = function(e) NA_real_)
     }
     
@@ -294,6 +294,56 @@ p_cont <- dt |>
 ggsave(plot_path("power_nominal_plot.pdf"), plot = p_cont, width = 7, height = 7)
 
 cat("Plot saved to", plot_path("power_nominal_plot.pdf"), "\n")
+
+# -----------------------------------------------------------------------------
+# Summary tables
+# -----------------------------------------------------------------------------
+# Note: rho = 0 is the null case (level / size), not power; it is kept in
+# the table below as a reference row rather than split out separately —
+# when reporting, the rho = 0 row should be read/labelled as empirical size.
+test_cols <- c("Bn", "Pn", "ChiSqr", "Hoef", "Genest", "BRS")
+
+# Mean rejection rate and SD by rho, test and table size
+# (rho = 0 row = empirical size; rho > 0 rows = power)
+mean_power <- dt |>
+  group_by(table, rho, test) |>
+  summarise(mean_power = mean(rejection_rate),
+            sd_power   = sd(rejection_rate),
+            .groups    = "drop") |>
+  arrange(table, rho, desc(mean_power))
+
+cat("\n--- Mean rejection rate by test, rho and table size ---\n")
+cat("    (rho = 0 is empirical size, not power)\n")
+print(mean_power)
+fwrite(mean_power, res_path("mean_power.csv"))
+
+# Mean rank across (n, rho) cells, separately for each table size
+# (lower = better). Computed on rho > 0 only, since ranking "best under H0"
+# is not a meaningful notion of power.
+dt_power <- dt |> filter(rho > 0)
+
+mean_ranks_list <- list()
+for (tbl in unique(dt_power$table)) {
+  wdt <- dt_power |>
+    filter(table == tbl) |>
+    select(-table) |>
+    pivot_wider(names_from = test, values_from = rejection_rate)
+  
+  rdt <- t(apply(
+    as.matrix(wdt[, test_cols]), 1,
+    data.table::frankv, order = -1L, ties.method = "min"
+  ))
+  colnames(rdt) <- paste0("rank_", test_cols)
+  mean_ranks_list[[tbl]] <- sort(colMeans(rdt))
+}
+
+cat("\n--- Mean rank by test, 3 x 3 table, rho > 0 only (lower = better) ---\n")
+print(mean_ranks_list[["3 x 3"]])
+cat("\n--- Mean rank by test, 5 x 5 table, rho > 0 only (lower = better) ---\n")
+print(mean_ranks_list[["5 x 5"]])
+
+fwrite(as.data.frame(t(mean_ranks_list[["3 x 3"]])), res_path("mean_ranks_3x3.csv"))
+fwrite(as.data.frame(t(mean_ranks_list[["5 x 5"]])), res_path("mean_ranks_5x5.csv"))
 
 # -----------------------------------------------------------------------------
 # Quick check: n = 100 cross-tab
