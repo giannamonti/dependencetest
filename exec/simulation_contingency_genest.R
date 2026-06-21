@@ -5,8 +5,8 @@
 # Purpose: this is NOT a replacement for the contingency-table simulation
 # in simulation_contingency.R. It is an additional, faithful replication of
 # the design used by Genest et al. to assess the behaviour of Sn relative to
-# chi-squared, G2, Zelterman and the Bakirov-Rizzo-Szekely (BRS) test, with
-# Bn and Pn added as new competitors. Reported regardless of outcome.
+# chi-squared, G2 and the Bakirov-Rizzo-Szekely (BRS) test, with Bn and Pn
+# added as new competitors. Reported regardless of outcome.
 #
 # Design (matching Genest et al. 2019, Supplementary Material):
 #   N    = 1000 simulation runs
@@ -34,12 +34,24 @@
 # unverified ad hoc formula, it was dropped; G2 and chi-squared already
 # cover the likelihood-based competitors used by Genest et al. (2019).
 #
-# Parallelization follows the same robust pattern as simulation_power_parallel.R
-# and the updated simulation_contingency.R:
-#   - data pre-generated in memory, passed to workers via param_list
-#   - workers started with --no-init-file (bypasses renv/.Rprofile issues)
-#   - library paths exported explicitly
-#   - tryCatch at the worker level and around individual fragile test calls
+# -----------------------------------------------------------------------------
+# IMPORTANT — fine-grained parallelization (read before changing N/chunk):
+#
+# A previous version assigned one entire (n, family, tau, margin) cell — all
+# N = 1000 replications — to a single worker via parLapply. This is the same
+# load-imbalance issue diagnosed in simulation_contingency.R: BRS
+# (energy::indep.test, R = 199) and Genest (TestIndCopula, B = 1000) are both
+# bootstrap-based and their cost can vary substantially across cells
+# (e.g. sparse tables from Geo/NB margins at high tau). With one task = one
+# full cell, the heaviest cell pins a single core for the entire run while
+# lighter cells finish quickly and leave other cores idle — the job does not
+# hang, it is bottlenecked on the single slowest worker.
+#
+# Fix: each task is now a (cell, chunk) pair — a cell split into chunks of
+# `chunk_size` replications. All chunks across all cells are flattened into
+# one task list distributed via parLapply, so the heaviest cell's workload
+# is spread across many workers. Per-chunk p-values are re-aggregated by
+# cell after the parallel run, before computing rejection rates.
 # =============================================================================
 
 library(copula)
@@ -55,10 +67,11 @@ library(parallel)
 # -----------------------------------------------------------------------------
 # Global constants
 # -----------------------------------------------------------------------------
-N    <- 1000          # simulation runs (matches Genest et al.: N = 1000)
-B    <- 1000           # multiplier bootstrap replicates for Sn / Tn2
-n_v  <- c(100, 250)    # sample sizes, matching Genest et al. Tables S1-S2
-tau_v <- c(0, 0.1, 0.2)             # 0 = independence (level), else power
+N          <- 1000     # simulation runs (matches Genest et al.: N = 1000)
+chunk_size <- 50        # replications per task; tune so a chunk takes a few
+# minutes even on the heaviest cell
+n_v   <- c(100, 250)    # sample sizes, matching Genest et al. Tables S1-S2
+tau_v <- c(0, 0.1, 0.2) # 0 = independence (level), else power
 families <- c("clayton", "gumbel")
 margins  <- c("P2", "Bin", "Geo", "NB")
 
@@ -109,9 +122,9 @@ gen_pair <- function(n, family, tau, margin) {
 }
 
 # -----------------------------------------------------------------------------
-# Pre-generate all simulation data IN MEMORY and embed into param_list
-# One cell = one (n, family, tau, margin) combination, with N pre-generated
-# (x, y) pairs of length n each.
+# Pre-generate all simulation data IN MEMORY, split into chunks of
+# `chunk_size` replications, and flatten into one long task list.
+# Each task = one (n, family, tau, margin, chunk) combination.
 # Note: tau = 0 is family-agnostic (pure independence), so it is generated
 # only once per (n, margin) and labelled family = "H0" to avoid duplicating
 # identical cells under both "clayton" and "gumbel".
@@ -122,9 +135,7 @@ set.seed(20240601)
 cells <- list()
 for (nk in n_v) {
   for (mg in margins) {
-    # H0 cell (tau = 0), generated once
     cells[[length(cells) + 1]] <- list(n = nk, family = "H0", tau = 0, margin = mg)
-    # Dependence cells, for each family and tau > 0
     for (fam in families) {
       for (tv in tau_v[tau_v > 0]) {
         cells[[length(cells) + 1]] <- list(n = nk, family = fam, tau = tv, margin = mg)
@@ -133,31 +144,41 @@ for (nk in n_v) {
   }
 }
 
-param_list <- vector("list", length(cells))
-for (idx in seq_along(cells)) {
-  cl_ <- cells[[idx]]
+n_chunks  <- ceiling(N / chunk_size)
+task_list <- vector("list", length(cells) * n_chunks)
+task_idx  <- 1L
+
+for (cell_idx in seq_along(cells)) {
+  cl_ <- cells[[cell_idx]]
   nk  <- cl_$n
   fam <- cl_$family
   tv  <- cl_$tau
   mg  <- cl_$margin
+  fam_gen <- if (fam == "H0") "clayton" else fam   # tau=0 makes family irrelevant
   
-  x_mat <- matrix(NA_real_, nrow = N, ncol = nk)
-  y_mat <- matrix(NA_real_, nrow = N, ncol = nk)
-  
-  for (i in seq_len(N)) {
-    fam_gen <- if (fam == "H0") "clayton" else fam   # tau=0 makes family irrelevant
-    pair <- gen_pair(nk, fam_gen, tv, mg)
-    x_mat[i, ] <- pair[, 1]
-    y_mat[i, ] <- pair[, 2]
+  for (ch in seq_len(n_chunks)) {
+    this_chunk_size <- min(chunk_size, N - (ch - 1L) * chunk_size)
+    
+    x_mat <- matrix(NA_real_, nrow = this_chunk_size, ncol = nk)
+    y_mat <- matrix(NA_real_, nrow = this_chunk_size, ncol = nk)
+    
+    for (i in seq_len(this_chunk_size)) {
+      pair <- gen_pair(nk, fam_gen, tv, mg)
+      x_mat[i, ] <- pair[, 1]
+      y_mat[i, ] <- pair[, 2]
+    }
+    
+    task_list[[task_idx]] <- list(
+      cell_id = cell_idx, chunk_id = ch,
+      n = nk, family = fam, tau = tv, margin = mg,
+      x = x_mat, y = y_mat
+    )
+    task_idx <- task_idx + 1L
   }
-  
-  param_list[[idx]] <- list(
-    n = nk, family = fam, tau = tv, margin = mg,
-    x = x_mat, y = y_mat
-  )
 }
 
-cat("Data generation complete. ", length(param_list), "cells.\n")
+cat("Data generation complete. ", length(task_list), "tasks across",
+    length(cells), "cells (chunk size =", chunk_size, ").\n")
 
 # -----------------------------------------------------------------------------
 # Parallel cluster setup
@@ -178,7 +199,7 @@ clusterEvalQ(cl, {
 })
 
 # -----------------------------------------------------------------------------
-# G2 (likelihood-ratio) and Zelterman test implementations
+# G2 (likelihood-ratio) test implementation
 # (not bundled in any of the packages already loaded, so implemented here)
 # -----------------------------------------------------------------------------
 g2_test <- function(x, y) {
@@ -199,38 +220,39 @@ g2_test <- function(x, y) {
 clusterExport(cl, "g2_test")
 
 # -----------------------------------------------------------------------------
-# Worker function: processes one (n, family, tau, margin) cell
+# Worker function: processes one (n, family, tau, margin, chunk) task,
+# returning per-replication p-values (not yet aggregated to a rejection
+# rate, since a cell's full N is now split across many tasks).
+# Entire body wrapped in tryCatch; individual fragile test calls wrapped
+# too so a single failure yields NA rather than crashing the worker.
 # -----------------------------------------------------------------------------
-run_one <- function(params) {
+run_chunk <- function(task) {
   tryCatch({
     
-    nk  <- params$n
-    fam <- params$family
-    tv  <- params$tau
-    mg  <- params$margin
-    Nl  <- nrow(params$x)
+    nk  <- task$n
+    fam <- task$family
+    tv  <- task$tau
+    mg  <- task$margin
+    chunk_n <- nrow(task$x)
     
-    pval_Bn       <- numeric(Nl)
-    pval_Pn       <- numeric(Nl)
-    pval_Genest   <- numeric(Nl)
-    pval_BRS      <- numeric(Nl)
-    pval_ChiSqr   <- numeric(Nl)
-    pval_G2       <- numeric(Nl)
+    pval_Bn     <- numeric(chunk_n)
+    pval_Pn     <- numeric(chunk_n)
+    pval_Genest <- numeric(chunk_n)
+    pval_BRS    <- numeric(chunk_n)
+    pval_ChiSqr <- numeric(chunk_n)
+    pval_G2     <- numeric(chunk_n)
     
-    for (i in seq_len(Nl)) {
+    for (i in seq_len(chunk_n)) {
       
-      xi <- params$x[i, ]
-      yi <- params$y[i, ]
+      xi <- task$x[i, ]
+      yi <- task$y[i, ]
       
-      pval_Bn[i] <- tryCatch({
-        res <- indeptest(as.factor(xi), as.factor(yi), basis = "dummy")
-        res$B_pvalue
-      }, error = function(e) NA_real_)
+      bn_pn <- tryCatch({
+        indeptest(as.factor(xi), as.factor(yi), basis = "dummy")
+      }, error = function(e) NULL)
       
-      pval_Pn[i] <- tryCatch({
-        res <- indeptest(as.factor(xi), as.factor(yi), basis = "dummy")
-        res$P_pvalue
-      }, error = function(e) NA_real_)
+      pval_Bn[i] <- if (!is.null(bn_pn)) bn_pn$B_pvalue else NA_real_
+      pval_Pn[i] <- if (!is.null(bn_pn)) bn_pn$P_pvalue else NA_real_
       
       pval_Genest[i] <- tryCatch({
         out <- TestIndCopula(cbind(xi, yi), trunc.level = 2, B = 1000,
@@ -251,35 +273,34 @@ run_one <- function(params) {
       }, error = function(e) NA_real_)
     }
     
-    rbind(
-      data.frame(rejection_rate = mean(pval_Bn        < 0.05, na.rm = TRUE), n = nk, family = fam, tau = tv, margin = mg, test = "Bn"),
-      data.frame(rejection_rate = mean(pval_Pn        < 0.05, na.rm = TRUE), n = nk, family = fam, tau = tv, margin = mg, test = "Pn"),
-      data.frame(rejection_rate = mean(pval_Genest    < 0.05, na.rm = TRUE), n = nk, family = fam, tau = tv, margin = mg, test = "Genest"),
-      data.frame(rejection_rate = mean(pval_BRS       < 0.05, na.rm = TRUE), n = nk, family = fam, tau = tv, margin = mg, test = "BRS"),
-      data.frame(rejection_rate = mean(pval_ChiSqr    < 0.05, na.rm = TRUE), n = nk, family = fam, tau = tv, margin = mg, test = "ChiSqr"),
-      data.frame(rejection_rate = mean(pval_G2        < 0.05, na.rm = TRUE), n = nk, family = fam, tau = tv, margin = mg, test = "G2")
+    list(
+      cell_id = task$cell_id, n = nk, family = fam, tau = tv, margin = mg,
+      pvals = data.frame(Bn = pval_Bn, Pn = pval_Pn, Genest = pval_Genest,
+                         BRS = pval_BRS, ChiSqr = pval_ChiSqr, G2 = pval_G2)
     )
     
   }, error = function(e) {
-    message("ERROR n=", params$n, " family=", params$family,
-            " tau=", params$tau, " margin=", params$margin,
+    message("ERROR cell_id=", task$cell_id, " chunk_id=", task$chunk_id,
+            " n=", task$n, " family=", task$family,
+            " tau=", task$tau, " margin=", task$margin,
             ": ", conditionMessage(e))
     NULL
   })
 }
 
-clusterExport(cl, "run_one")
+clusterExport(cl, "run_chunk")
 
 set.seed(20240602)
 clusterSetRNGStream(cl, 20240602)
 
 # -----------------------------------------------------------------------------
-# Run parallel computation
+# Run parallel computation over the flattened (cell, chunk) task list
 # -----------------------------------------------------------------------------
-cat("Starting parallel computation on", n_cores, "cores...\n")
+cat("Starting parallel computation on", n_cores, "cores,",
+    length(task_list), "tasks...\n")
 t_start <- proc.time()
 
-results_list <- parLapply(cl, param_list, run_one)
+chunk_results <- parLapply(cl, task_list, run_chunk)
 
 t_elapsed <- proc.time() - t_start
 cat(sprintf("Done. Wall time: %.1f min\n", t_elapsed["elapsed"] / 60))
@@ -287,12 +308,35 @@ cat(sprintf("Done. Wall time: %.1f min\n", t_elapsed["elapsed"] / 60))
 stopCluster(cl)
 
 # -----------------------------------------------------------------------------
+# Drop failed chunks, then re-aggregate p-values by cell before computing
+# rejection rates, since a cell's N replications are now spread across
+# multiple chunk results.
+# -----------------------------------------------------------------------------
+n_null <- sum(sapply(chunk_results, is.null))
+if (n_null > 0L) warning(n_null, " chunks returned NULL and were dropped.")
+chunk_results <- Filter(Negate(is.null), chunk_results)
+
+cells_split <- split(chunk_results, sapply(chunk_results, function(r) r$cell_id))
+
+test_cols <- c("Bn", "Pn", "Genest", "BRS", "ChiSqr", "G2")
+
+results_list <- lapply(cells_split, function(chunks) {
+  nk  <- chunks[[1]]$n
+  fam <- chunks[[1]]$family
+  tv  <- chunks[[1]]$tau
+  mg  <- chunks[[1]]$margin
+  
+  pvals <- rbindlist(lapply(chunks, function(c) c$pvals))
+  
+  data.table(
+    rejection_rate = sapply(test_cols, function(tc) mean(pvals[[tc]] < 0.05, na.rm = TRUE)),
+    n = nk, family = fam, tau = tv, margin = mg, test = test_cols
+  )
+})
+
+# -----------------------------------------------------------------------------
 # Collect and save results
 # -----------------------------------------------------------------------------
-n_null <- sum(sapply(results_list, is.null))
-if (n_null > 0L) warning(n_null, " cells returned NULL and were dropped.")
-results_list <- Filter(Negate(is.null), results_list)
-
 dt <- rbindlist(results_list)
 fwrite(dt, res_path("genest_replication_results.csv"))
 cat("Results saved to", res_path("genest_replication_results.csv"), "\n")
@@ -335,10 +379,6 @@ cat("Plots saved to", dir_plots, "\n")
 # Note: family == "H0" (tau == 0) is the null case (level / size), not
 # power; it is kept in the table below as a reference row — when reporting,
 # the H0 rows should be read/labelled as empirical size.
-test_cols <- c("Bn", "Pn", "Genest", "BRS", "ChiSqr", "G2")
-
-# Mean rejection rate and SD by n, family, tau, margin and test
-# (family == "H0" rows = empirical size; others = power)
 mean_power <- dt |>
   group_by(n, family, tau, margin, test) |>
   summarise(mean_power = mean(rejection_rate),

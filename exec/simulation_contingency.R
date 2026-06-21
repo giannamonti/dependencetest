@@ -14,12 +14,26 @@
 #   nsim   = 10,000 replications per (n, rho) cell
 #   tables = 3x3 and 5x5 ordinal discretizations of a bivariate normal
 #
-# Parallelization mirrors simulation_power_parallel.R:
-#   - all data pre-generated in memory and embedded in the parameter list
-#   - workers started with --no-init-file to bypass renv/.Rprofile issues
-#   - library paths exported explicitly to workers
-#   - entire worker body wrapped in tryCatch; TestIndCopula / indep.test
-#     calls wrapped individually so a single failure yields NA, not a crash
+# -----------------------------------------------------------------------------
+# IMPORTANT — fine-grained parallelization (read before changing nsim/chunk):
+#
+# A previous version of this script assigned one entire (n, rho) cell — all
+# nsim = 1e4 replications — to a single worker. This caused severe load
+# imbalance: an isolated timing test showed that BRS (energy::indep.test,
+# R = 199) costs ~2.8 seconds per replication on the heaviest cell (5x5,
+# n = 200, rho = 0.9), i.e. ~7.8 hours for that cell ALONE on one core. Since
+# parLapply assigns whole list elements to workers, that single cell pinned
+# one core for days while lighter cells finished quickly and left other
+# cores idle — the job did not hang, it was simply bottlenecked on the
+# single slowest worker, and no amount of additional cores would have
+# helped as long as one task = one full cell.
+#
+# Fix: each task sent to a worker is now a (cell, chunk) pair — a cell
+# split into chunks of `chunk_size` replications. All chunks across all
+# cells are flattened into one long task list and distributed via
+# parLapply, so the heaviest cell's workload is spread across many workers
+# instead of pinning a single one. Per-chunk results are re-aggregated by
+# cell after the parallel run.
 # =============================================================================
 
 library(Hmisc)
@@ -36,7 +50,10 @@ library(parallel)
 # -----------------------------------------------------------------------------
 # Global constants
 # -----------------------------------------------------------------------------
-nsim <- 1e4
+nsim       <- 1e4
+chunk_size <- 200     # replications per task; tune so a chunk takes a few
+# minutes even on the heaviest cell (5x5, rho=0.9):
+# ~2.8s/rep for BRS there => ~9.3 min per 200-rep chunk
 n    <- c(25, 50, 100, 200)
 r    <- seq(0, 0.9, by = 0.1)
 
@@ -58,7 +75,6 @@ plot_path <- function(...) file.path(dir_plots,   ...)
 # bivariate normal with correlation rho, by discretizing each margin.
 # Cutpoints:
 #   order == 3: (-Inf, -0.6], (-0.6, 0.6], (0.6, +Inf)
-#   order == 4: (-Inf, -0.8], (-0.8, 0], (0, 0.8], (0.8, +Inf)
 #   order == 5: (-Inf, -1], (-1, -0.3], (-0.3, 0], (0, 1], (1, +Inf)
 cont.table <- function(n, order, rho = 0.5) {
   mu    <- c(0, 0)
@@ -70,13 +86,6 @@ cont.table <- function(n, order, rho = 0.5) {
                               ifelse(x[, 1] >   0.6, 3, 2)))
     y.ord <- as.factor(ifelse(x[, 2] <= -0.6, 1,
                               ifelse(x[, 2] >   0.6, 3, 2)))
-  } else if (order == 4) {
-    x.ord <- as.factor(ifelse(x[, 1] <= -0.8, 1,
-                              ifelse(x[, 1] >   0.8, 4,
-                                     ifelse(x[, 1] >   0.0, 3, 2))))
-    y.ord <- as.factor(ifelse(x[, 2] <= -0.8, 1,
-                              ifelse(x[, 2] >   0.8, 4,
-                                     ifelse(x[, 2] >   0.0, 3, 2))))
   } else if (order == 5) {
     x.ord <- as.factor(ifelse(x[, 1] <= -1.0, 1,
                               ifelse(x[, 1] >   1.0, 5,
@@ -93,45 +102,54 @@ cont.table <- function(n, order, rho = 0.5) {
 }
 
 # -----------------------------------------------------------------------------
-# Pre-generate all simulation data IN MEMORY and embed into param_list
-# Each cell (n_k, rho_j) gets its own pre-generated set of nsim tables for
-# both the 3x3 and 5x5 discretizations, stored as numeric matrices.
+# Pre-generate all simulation data IN MEMORY, split into chunks of
+# `chunk_size` replications, and flatten into one long task list.
+# Each task = one (n, rho, chunk) combination, carrying its own pre-generated
+# data for both the 3x3 and 5x5 tables.
 # -----------------------------------------------------------------------------
 cat("Generating simulation data in memory...\n")
 set.seed(42)
 
-grid       <- expand.grid(k = seq_along(n), j = seq_along(r))
-param_list <- vector("list", nrow(grid))
+grid        <- expand.grid(k = seq_along(n), j = seq_along(r))
+n_chunks    <- ceiling(nsim / chunk_size)
+task_list   <- vector("list", nrow(grid) * n_chunks)
+task_idx    <- 1L
 
-for (idx in seq_len(nrow(grid))) {
-  k  <- grid$k[idx]
-  j  <- grid$j[idx]
+for (cell_idx in seq_len(nrow(grid))) {
+  k  <- grid$k[cell_idx]
+  j  <- grid$j[cell_idx]
   nk <- n[k]
   rj <- r[j]
   
-  # Pre-generate nsim tables for 3x3 and 5x5, store as numeric (not factor)
-  x3 <- matrix(NA_real_, nrow = nsim, ncol = nk)
-  y3 <- matrix(NA_real_, nrow = nsim, ncol = nk)
-  x5 <- matrix(NA_real_, nrow = nsim, ncol = nk)
-  y5 <- matrix(NA_real_, nrow = nsim, ncol = nk)
-  
-  for (i in seq_len(nsim)) {
-    xy3 <- cont.table(nk, order = 3, rho = rj)
-    x3[i, ] <- as.numeric(as.factor(xy3[1, ]))
-    y3[i, ] <- as.numeric(as.factor(xy3[2, ]))
+  for (ch in seq_len(n_chunks)) {
+    this_chunk_size <- min(chunk_size, nsim - (ch - 1L) * chunk_size)
     
-    xy5 <- cont.table(nk, order = 5, rho = rj)
-    x5[i, ] <- as.numeric(as.factor(xy5[1, ]))
-    y5[i, ] <- as.numeric(as.factor(xy5[2, ]))
+    x3 <- matrix(NA_real_, nrow = this_chunk_size, ncol = nk)
+    y3 <- matrix(NA_real_, nrow = this_chunk_size, ncol = nk)
+    x5 <- matrix(NA_real_, nrow = this_chunk_size, ncol = nk)
+    y5 <- matrix(NA_real_, nrow = this_chunk_size, ncol = nk)
+    
+    for (i in seq_len(this_chunk_size)) {
+      xy3 <- cont.table(nk, order = 3, rho = rj)
+      x3[i, ] <- as.numeric(as.factor(xy3[1, ]))
+      y3[i, ] <- as.numeric(as.factor(xy3[2, ]))
+      
+      xy5 <- cont.table(nk, order = 5, rho = rj)
+      x5[i, ] <- as.numeric(as.factor(xy5[1, ]))
+      y5[i, ] <- as.numeric(as.factor(xy5[2, ]))
+    }
+    
+    task_list[[task_idx]] <- list(
+      cell_id = cell_idx, chunk_id = ch,
+      n = nk, rho = rj,
+      x3 = x3, y3 = y3, x5 = x5, y5 = y5
+    )
+    task_idx <- task_idx + 1L
   }
-  
-  param_list[[idx]] <- list(
-    k = k, j = j, n = nk, rho = rj,
-    x3 = x3, y3 = y3, x5 = x5, y5 = y5
-  )
 }
 
-cat("Data generation complete.\n")
+cat("Data generation complete. ", length(task_list), "tasks across",
+    nrow(grid), "cells (chunk size =", chunk_size, ").\n")
 
 # -----------------------------------------------------------------------------
 # Parallel cluster setup
@@ -154,36 +172,38 @@ clusterEvalQ(cl, {
 })
 
 # -----------------------------------------------------------------------------
-# Worker function: processes one (n, rho) cell for both 3x3 and 5x5 tables
-# Entire body wrapped in tryCatch; individual test calls wrapped too so a
-# single failed replication yields NA rather than crashing the worker.
+# Worker function: processes one (n, rho, chunk) task for both 3x3 and 5x5
+# tables, returning per-replication p-values (not yet aggregated to a
+# rejection rate, since a cell's full nsim is now split across many tasks).
+# Entire body wrapped in tryCatch; individual fragile test calls wrapped
+# too so a single failure yields NA rather than crashing the worker.
 # -----------------------------------------------------------------------------
-run_one <- function(params) {
+run_chunk <- function(task) {
   tryCatch({
     
-    nk         <- params$n
-    rj         <- params$rho
-    nsim_local <- nrow(params$x3)
+    nk         <- task$n
+    rj         <- task$rho
+    chunk_n    <- nrow(task$x3)
     
-    Btest.pval3     <- numeric(nsim_local)
-    Ptest.pval3     <- numeric(nsim_local)
-    chisqtest.pval3 <- numeric(nsim_local)
-    hoeffd.pval3    <- numeric(nsim_local)
-    genest.pval3    <- numeric(nsim_local)
-    brs.pval3       <- numeric(nsim_local)
+    Btest.pval3     <- numeric(chunk_n)
+    Ptest.pval3     <- numeric(chunk_n)
+    chisqtest.pval3 <- numeric(chunk_n)
+    hoeffd.pval3    <- numeric(chunk_n)
+    genest.pval3    <- numeric(chunk_n)
+    brs.pval3       <- numeric(chunk_n)
     
-    Btest.pval5     <- numeric(nsim_local)
-    Ptest.pval5     <- numeric(nsim_local)
-    chisqtest.pval5 <- numeric(nsim_local)
-    hoeffd.pval5    <- numeric(nsim_local)
-    genest.pval5    <- numeric(nsim_local)
-    brs.pval5       <- numeric(nsim_local)
+    Btest.pval5     <- numeric(chunk_n)
+    Ptest.pval5     <- numeric(chunk_n)
+    chisqtest.pval5 <- numeric(chunk_n)
+    hoeffd.pval5    <- numeric(chunk_n)
+    genest.pval5    <- numeric(chunk_n)
+    brs.pval5       <- numeric(chunk_n)
     
-    for (i in seq_len(nsim_local)) {
+    for (i in seq_len(chunk_n)) {
       
       # ---- 3 x 3 table ------------------------------------------------------
-      x3i <- params$x3[i, ]
-      y3i <- params$y3[i, ]
+      x3i <- task$x3[i, ]
+      y3i <- task$y3[i, ]
       
       res3 <- indeptest(as.factor(x3i), as.factor(y3i), basis = "dummy")
       Btest.pval3[i]     <- res3$B_pvalue
@@ -203,8 +223,8 @@ run_one <- function(params) {
       }, error = function(e) NA_real_)
       
       # ---- 5 x 5 table ------------------------------------------------------
-      x5i <- params$x5[i, ]
-      y5i <- params$y5[i, ]
+      x5i <- task$x5[i, ]
+      y5i <- task$y5[i, ]
       
       res5 <- indeptest(as.factor(x5i), as.factor(y5i), basis = "dummy")
       Btest.pval5[i]     <- res5$B_pvalue
@@ -224,39 +244,36 @@ run_one <- function(params) {
       }, error = function(e) NA_real_)
     }
     
-    rbind(
-      data.frame(rejection_rate = mean(Btest.pval3     < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "3 x 3", test = "Bn"),
-      data.frame(rejection_rate = mean(Ptest.pval3     < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "3 x 3", test = "Pn"),
-      data.frame(rejection_rate = mean(chisqtest.pval3 < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "3 x 3", test = "ChiSqr"),
-      data.frame(rejection_rate = mean(hoeffd.pval3    < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "3 x 3", test = "Hoef"),
-      data.frame(rejection_rate = mean(genest.pval3    < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "3 x 3", test = "Genest"),
-      data.frame(rejection_rate = mean(brs.pval3       < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "3 x 3", test = "BRS"),
-      data.frame(rejection_rate = mean(Btest.pval5     < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "5 x 5", test = "Bn"),
-      data.frame(rejection_rate = mean(Ptest.pval5     < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "5 x 5", test = "Pn"),
-      data.frame(rejection_rate = mean(chisqtest.pval5 < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "5 x 5", test = "ChiSqr"),
-      data.frame(rejection_rate = mean(hoeffd.pval5    < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "5 x 5", test = "Hoef"),
-      data.frame(rejection_rate = mean(genest.pval5    < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "5 x 5", test = "Genest"),
-      data.frame(rejection_rate = mean(brs.pval5       < 0.05, na.rm = TRUE), n = nk, rho = rj, table = "5 x 5", test = "BRS")
+    list(
+      cell_id = task$cell_id, n = nk, rho = rj,
+      pvals3 = data.frame(Bn = Btest.pval3, Pn = Ptest.pval3,
+                          ChiSqr = chisqtest.pval3, Hoef = hoeffd.pval3,
+                          Genest = genest.pval3, BRS = brs.pval3),
+      pvals5 = data.frame(Bn = Btest.pval5, Pn = Ptest.pval5,
+                          ChiSqr = chisqtest.pval5, Hoef = hoeffd.pval5,
+                          Genest = genest.pval5, BRS = brs.pval5)
     )
     
   }, error = function(e) {
-    message("ERROR n=", params$n, " rho=", params$rho, ": ", conditionMessage(e))
+    message("ERROR cell_id=", task$cell_id, " chunk_id=", task$chunk_id,
+            " n=", task$n, " rho=", task$rho, ": ", conditionMessage(e))
     NULL
   })
 }
 
-clusterExport(cl, "run_one")
+clusterExport(cl, "run_chunk")
 
 set.seed(20230101)
 clusterSetRNGStream(cl, 20230101)
 
 # -----------------------------------------------------------------------------
-# Run parallel computation
+# Run parallel computation over the flattened (cell, chunk) task list
 # -----------------------------------------------------------------------------
-cat("Starting parallel computation on", n_cores, "cores...\n")
+cat("Starting parallel computation on", n_cores, "cores,",
+    length(task_list), "tasks...\n")
 t_start <- proc.time()
 
-results_list <- parLapply(cl, param_list, run_one)
+chunk_results <- parLapply(cl, task_list, run_chunk)
 
 t_elapsed <- proc.time() - t_start
 cat(sprintf("Done. Wall time: %.1f min\n", t_elapsed["elapsed"] / 60))
@@ -264,12 +281,40 @@ cat(sprintf("Done. Wall time: %.1f min\n", t_elapsed["elapsed"] / 60))
 stopCluster(cl)
 
 # -----------------------------------------------------------------------------
+# Drop failed chunks, then re-aggregate p-values by cell (n, rho) before
+# computing rejection rates, since a cell's nsim replications are now
+# spread across multiple chunk results.
+# -----------------------------------------------------------------------------
+n_null <- sum(sapply(chunk_results, is.null))
+if (n_null > 0L) warning(n_null, " chunks returned NULL and were dropped.")
+chunk_results <- Filter(Negate(is.null), chunk_results)
+
+cells <- split(chunk_results, sapply(chunk_results, function(r) r$cell_id))
+
+results_list <- lapply(cells, function(chunks) {
+  nk <- chunks[[1]]$n
+  rj <- chunks[[1]]$rho
+  
+  pvals3 <- rbindlist(lapply(chunks, function(c) c$pvals3))
+  pvals5 <- rbindlist(lapply(chunks, function(c) c$pvals5))
+  
+  test_cols <- c("Bn", "Pn", "ChiSqr", "Hoef", "Genest", "BRS")
+  
+  rbind(
+    data.table(
+      rejection_rate = sapply(test_cols, function(tc) mean(pvals3[[tc]] < 0.05, na.rm = TRUE)),
+      n = nk, rho = rj, table = "3 x 3", test = test_cols
+    ),
+    data.table(
+      rejection_rate = sapply(test_cols, function(tc) mean(pvals5[[tc]] < 0.05, na.rm = TRUE)),
+      n = nk, rho = rj, table = "5 x 5", test = test_cols
+    )
+  )
+})
+
+# -----------------------------------------------------------------------------
 # Collect and save results
 # -----------------------------------------------------------------------------
-n_null <- sum(sapply(results_list, is.null))
-if (n_null > 0L) warning(n_null, " cells returned NULL and were dropped.")
-results_list <- Filter(Negate(is.null), results_list)
-
 dt <- rbindlist(results_list)
 fwrite(dt, res_path("rejection_rates_nominal.csv"))
 cat("Results saved to", res_path("rejection_rates_nominal.csv"), "\n")
