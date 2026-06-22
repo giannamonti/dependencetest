@@ -51,9 +51,13 @@ library(parallel)
 # Global constants
 # -----------------------------------------------------------------------------
 nsim       <- 1e4
-chunk_size <- 200     # replications per task; tune so a chunk takes a few
-# minutes even on the heaviest cell (5x5, rho=0.9):
-# ~2.8s/rep for BRS there => ~9.3 min per 200-rep chunk
+chunk_size <- 20      # replications per task. Diagnostic timing (see
+# diagnostic_timing.R) showed BRS costs ~9-11s per
+# replication at n=200 across ALL rho values, not
+# just the single point originally tested (2.8s at
+# n=200, rho=0.9). Worst case: chunk_size=20 x 11s
+# ~= 3.7 min per task, keeping individual tasks short
+# regardless of which cell they belong to.
 n    <- c(25, 50, 100, 200)
 r    <- seq(0, 0.9, by = 0.1)
 

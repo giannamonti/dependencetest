@@ -68,8 +68,15 @@ library(parallel)
 # Global constants
 # -----------------------------------------------------------------------------
 N          <- 1000     # simulation runs (matches Genest et al.: N = 1000)
-chunk_size <- 50        # replications per task; tune so a chunk takes a few
-# minutes even on the heaviest cell
+chunk_size <- 10        # replications per task. No diagnostic timing run yet
+# exists for these count margins (P2/Bin/Geo/NB) at
+# n=250 specifically, but simulation_contingency.R's
+# diagnostic showed BRS can cost ~9-11s/replication
+# at n=200 for ordinal tables; chunk_size=10 keeps
+# each task under ~2 minutes even if a similar or
+# worse cost applies here. Re-run a similar
+# diagnostic_timing-style probe for this design if
+# load imbalance reappears.
 n_v   <- c(100, 250)    # sample sizes, matching Genest et al. Tables S1-S2
 tau_v <- c(0, 0.1, 0.2) # 0 = independence (level), else power
 families <- c("clayton", "gumbel")
