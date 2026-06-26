@@ -156,6 +156,24 @@ cat("Data generation complete. ", length(task_list), "tasks across",
     nrow(grid), "cells (chunk size =", chunk_size, ").\n")
 
 # -----------------------------------------------------------------------------
+# Shuffle task order before scheduling.
+#
+# task_list as built above groups tasks by cell (n, rho), and cells are
+# built in a fixed loop order (n outer, rho inner). All chunks for n = 200
+# (the heaviest sample size, especially for BRS — see diagnostic_timing.R
+# results showing ~9-11s/replication there vs <1s for n<=100) end up
+# contiguous in the list. parLapply uses STATIC scheduling: it slices the
+# list into contiguous blocks and assigns one block per worker up front.
+# This is what caused the severe load imbalance observed in production
+# (some workers idle after ~30 min while others ran continuously for over
+# 70 hours) even after introducing chunking — chunking alone reduces task
+# size, but contiguous heavy chunks can still all land on the same worker
+# block. Shuffling breaks up this grouping.
+# -----------------------------------------------------------------------------
+set.seed(20230102)
+task_list <- task_list[sample(length(task_list))]
+
+# -----------------------------------------------------------------------------
 # Parallel cluster setup
 # -----------------------------------------------------------------------------
 n_cores <- max(1L, detectCores(logical = FALSE) - 1L)
@@ -277,7 +295,7 @@ cat("Starting parallel computation on", n_cores, "cores,",
     length(task_list), "tasks...\n")
 t_start <- proc.time()
 
-chunk_results <- parLapply(cl, task_list, run_chunk)
+chunk_results <- parLapplyLB(cl, task_list, run_chunk)
 
 t_elapsed <- proc.time() - t_start
 cat(sprintf("Done. Wall time: %.1f min\n", t_elapsed["elapsed"] / 60))

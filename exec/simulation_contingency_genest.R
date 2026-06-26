@@ -48,10 +48,15 @@
 # hang, it is bottlenecked on the single slowest worker.
 #
 # Fix: each task is now a (cell, chunk) pair — a cell split into chunks of
-# `chunk_size` replications. All chunks across all cells are flattened into
-# one task list distributed via parLapply, so the heaviest cell's workload
-# is spread across many workers. Per-chunk p-values are re-aggregated by
-# cell after the parallel run, before computing rejection rates.
+# `chunk_size` replications. All chunks across all cells are flattened,
+# shuffled (see comment above task_list <- task_list[sample(...)] below),
+# and distributed via parLapplyLB (dynamic load balancing) instead of
+# parLapply (static scheduling). Chunking alone was not sufficient in
+# simulation_contingency.R: parLapply's static scheduling can still pin
+# heavy tasks to a few workers if they are grouped contiguously in the
+# task list, which they are here (all n=250 tasks are built consecutively).
+# parLapplyLB assigns a new task to a worker as soon as it becomes free,
+# so no single worker accumulates a disproportionate share of heavy tasks.
 # =============================================================================
 
 library(copula)
@@ -188,6 +193,25 @@ cat("Data generation complete. ", length(task_list), "tasks across",
     length(cells), "cells (chunk size =", chunk_size, ").\n")
 
 # -----------------------------------------------------------------------------
+# Shuffle task order before scheduling.
+#
+# task_list as built above groups tasks by cell, and cells are built in a
+# fixed loop order (n outer, margin, family, tau). All tasks for n = 250
+# (the heavier sample size, especially for BRS) end up contiguous in the
+# list. parLapply uses STATIC scheduling: it slices the list into
+# contiguous blocks and assigns one block per worker up front. If all the
+# heavy n=250 tasks land in the same block, the worker(s) handling that
+# block stay pinned for the entire run while workers with n=100 blocks
+# finish early and sit idle — this is exactly the load-imbalance pattern
+# observed in simulation_contingency.R even after introducing chunking.
+#
+# Shuffling breaks up this grouping so heavy and light tasks are
+# interleaved across whatever blocks parLapply creates.
+# -----------------------------------------------------------------------------
+set.seed(20240603)
+task_list <- task_list[sample(length(task_list))]
+
+# -----------------------------------------------------------------------------
 # Parallel cluster setup
 # -----------------------------------------------------------------------------
 n_cores <- max(1L, detectCores(logical = FALSE) - 1L)
@@ -307,7 +331,7 @@ cat("Starting parallel computation on", n_cores, "cores,",
     length(task_list), "tasks...\n")
 t_start <- proc.time()
 
-chunk_results <- parLapply(cl, task_list, run_chunk)
+chunk_results <- parLapplyLB(cl, task_list, run_chunk)
 
 t_elapsed <- proc.time() - t_start
 cat(sprintf("Done. Wall time: %.1f min\n", t_elapsed["elapsed"] / 60))
